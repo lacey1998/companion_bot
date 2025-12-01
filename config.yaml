@@ -1,0 +1,20 @@
+model:
+  name: "facebook/opt-1.3b"  # Changed from gpt-neo-1.3B - may have better conversational quality
+  type: "causal"  # Options: "causal" or "seq2seq"
+  local_dir: "./models/opt-1.3b"
+
+download:
+  model_name: "facebook/opt-1.3b"
+  local_dir: "./models/opt-1.3b"
+
+# Alternative models to try (uncomment to use):
+# model:
+#   name: "EleutherAI/gpt-neo-2.7B"  # Larger, better quality (requires more GPU memory)
+#   type: "causal"
+#   local_dir: "./models/gpt-neo-2.7B"
+#
+# model:
+#   name: "facebook/blenderbot-400M-distill"  # Specifically trained for conversation
+#   type: "seq2seq"
+#   local_dir: "./models/blenderbot-400M-distill"
+
