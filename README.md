@@ -91,7 +91,7 @@ print(response)
 
 ## Model
 
-This project uses the `facebook/blenderbot-400M-distill` model from Hugging Face. The model will be automatically downloaded on first run if not already present locally.
+This project uses the `facebook/gpt-neo-1.3B` model from Hugging Face. The model will be automatically downloaded on first run if not already present locally.
 
 ## License
 
