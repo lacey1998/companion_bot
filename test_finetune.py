@@ -30,6 +30,7 @@ def chat(user_input, emotion="sad"):
             max_new_tokens=150,
             temperature=0.7,
             do_sample=True,
+            top_p=0.9,
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -40,6 +41,17 @@ def chat(user_input, emotion="sad"):
         response = response.split("Chatbot:")[-1].strip()
     if "User:" in response:
         response = response.split("User:")[0].strip()
+    
+    last_punct = max(
+        response.rfind('.'),
+        response.rfind('!'),
+        response.rfind('?')
+    )
+    if last_punct != -1:
+        response = response[:last_punct + 1]
+    
+    return response
+    
     return response
 
 # test
