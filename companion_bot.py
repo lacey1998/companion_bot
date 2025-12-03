@@ -4,6 +4,7 @@ from typing import Optional, List, Dict
 import json
 import os
 import yaml
+from emotion_detector import EmotionDetector
 
 
 class CompanionBot:
@@ -12,9 +13,18 @@ class CompanionBot:
     using a language model (supports both causal and seq2seq models).
     """
     
-    def __init__(self, model, tokenizer, model_type: str = "causal", tone: str = "supportive", conversation_history: Optional[List[Dict]] = None):
+    def __init__(self, model, tokenizer, model_type: str = "causal", tone: str = "supportive", 
+                 conversation_history: Optional[List[Dict]] = None, use_emotion_detection: bool = True):
         """
         Initialize the CompanionBot.
+        
+        Args:
+            model: The loaded model
+            tokenizer: The loaded tokenizer
+            model_type: Type of model - "causal" or "seq2seq"
+            tone: The response tone (e.g., "cheerful", "supportive", "empathetic")
+            conversation_history: Optional list of previous conversation turns
+            use_emotion_detection: Whether to detect and use emotion from user input
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -22,6 +32,13 @@ class CompanionBot:
         self.tone = tone
         self.conversation_history = conversation_history or []
         self.device = next(model.parameters()).device
+        self.use_emotion_detection = use_emotion_detection
+        
+        # Initialize emotion detector if enabled
+        if use_emotion_detection:
+            self.emotion_detector = EmotionDetector()
+        else:
+            self.emotion_detector = None
         
         # Ensure pad_token is set for causal models
         if model_type == "causal" and self.tokenizer.pad_token is None:
@@ -36,15 +53,26 @@ class CompanionBot:
         """Get the current response tone."""
         return self.tone
     
-    def _build_empathetic_prompt(self, user_input: str, context_window: int = 3) -> str:
+    def _build_empathetic_prompt(self, user_input: str, context_window: int = 3, 
+                                  detected_emotion: Optional[str] = None) -> str:
         """
         Build an empathetic, context-aware prompt for the model.
+        Matches training data format: [emotion]\nContext:...\nUser:...\nChatbot:...
+        
+        Args:
+            user_input: The current user message
+            context_window: Number of recent conversation turns to include
+            detected_emotion: Detected emotion from user input (if available)
         """
+        # Detect emotion if enabled and not provided
+        if self.use_emotion_detection and detected_emotion is None:
+            detected_emotion = self.emotion_detector.detect_emotion(user_input)
+        
         # Build context from recent conversation history
         context_parts = []
         recent_history = self.conversation_history[-context_window:] if self.conversation_history else []
         
-        # Use simple format
+        # Use simple format for context
         for turn in recent_history:
             context_parts.append(f"User: {turn.get('user', '')}")
             if turn.get('bot'):
@@ -64,17 +92,31 @@ class CompanionBot:
         
         tone_instruction = tone_guidance.get(self.tone.lower(), "Respond normally.")
         
-        # Clean prompt without confusing formatting
-        if context_str:
-            prompt = f"""{tone_instruction}
+        # Build prompt matching training data format if emotion detection is enabled
+        if self.use_emotion_detection and detected_emotion and detected_emotion != "neutral":
+            # Format: [emotion]\nContext:...\nUser:...\nChatbot:
+            if context_str:
+                prompt = f"""[{detected_emotion}]
+Context: {context_str}
+User: {user_input}
+Chatbot:"""
+            else:
+                prompt = f"""[{detected_emotion}]
+Context: {user_input}
+User: {user_input}
+Chatbot:"""
+        else:
+            # Fallback to original format if emotion detection disabled
+            if context_str:
+                prompt = f"""{tone_instruction}
 
 Previous conversation:
 {context_str}
 
 User: {user_input}
 Bot:"""
-        else:
-            prompt = f"""{tone_instruction}
+            else:
+                prompt = f"""{tone_instruction}
 
 User: {user_input}
 Bot:"""
@@ -311,15 +353,27 @@ Bot:"""
         
         Args:
             user_input: The user's message
-            debug: If True, print the prompt for debugging
+            debug: If True, print the prompt and detected emotion for debugging
+            
+        Returns:
+            The bot's response
         """
-        # Build the prompt
-        prompt = self._build_empathetic_prompt(user_input)
+        # Detect emotion if enabled
+        detected_emotion = None
+        if self.use_emotion_detection:
+            detected_emotion = self.emotion_detector.detect_emotion(user_input)
         
-        # Debug: print the prompt
+        # Build the prompt (includes emotion if detection is enabled)
+        prompt = self._build_empathetic_prompt(user_input, detected_emotion=detected_emotion)
+        
+        # Debug: print the prompt and emotion
         if debug:
             print("\n" + "="*60)
             print("DEBUG - PROMPT BEING SENT TO MODEL:")
+            print("-"*60)
+            if detected_emotion:
+                print(f"Detected Emotion: {detected_emotion}")
+            print(f"Tone: {self.tone}")
             print("-"*60)
             print(prompt)
             print("="*60 + "\n")
@@ -327,17 +381,27 @@ Bot:"""
         # Generate response
         response = self.generate(prompt=prompt)
         
-        # Update conversation history
-        self.conversation_history.append({
+        # Update conversation history (include detected emotion for evaluation)
+        history_entry = {
             "user": user_input,
             "bot": response
-        })
+        }
+        if detected_emotion:
+            history_entry["detected_emotion"] = detected_emotion
+        
+        self.conversation_history.append(history_entry)
         
         # Keep history manageable
         if len(self.conversation_history) > 10:
             self.conversation_history = self.conversation_history[-10:]
         
         return response
+    
+    def get_last_detected_emotion(self) -> Optional[str]:
+        """Get the emotion detected from the last user input."""
+        if self.conversation_history:
+            return self.conversation_history[-1].get("detected_emotion")
+        return None
     
     def reset_conversation(self):
         """Reset the conversation history."""
@@ -451,21 +515,21 @@ if __name__ == "__main__":
         # Simple REPL loop
         while True:
             try:
-            user_input = input("You: ").strip()
-            
-            if not user_input:
-                continue
+                user_input = input("You: ").strip()
                 
-            if user_input.lower() in ["exit", "quit"]:
-                print("Goodbye!")
-                break
-            
+                if not user_input:
+                    continue
+                    
+                if user_input.lower() in ["exit", "quit"]:
+                    print("Goodbye!")
+                    break
+                
                 # Handle tone change
-            if user_input.lower().startswith("tone "):
+                if user_input.lower().startswith("tone "):
                     new_tone = user_input[5:].strip().lower()
                     valid_tones = ["cheerful", "supportive", "empathetic", "calm", "friendly", "angry"]
                     if new_tone in valid_tones:
-                bot.set_tone(new_tone)
+                        bot.set_tone(new_tone)
                     else:
                         print(f"Invalid tone. Choose from: {', '.join(valid_tones)}")
                     continue
@@ -483,19 +547,19 @@ if __name__ == "__main__":
                 # Handle reset
                 if user_input.lower() == "reset":
                     bot.reset_conversation()
-                continue
-            
+                    continue
+                
                 # Handle save
-            if user_input.lower() == "save":
-                bot.save_conversation("conversation.json")
-                print("Conversation saved to conversation.json")
-                continue
-            
+                if user_input.lower() == "save":
+                    bot.save_conversation("conversation.json")
+                    print("Conversation saved to conversation.json")
+                    continue
+                
                 # Handle load
-            if user_input.lower() == "load":
-                bot.load_conversation("conversation.json")
-                continue
-            
+                if user_input.lower() == "load":
+                    bot.load_conversation("conversation.json")
+                    continue
+                
                 # Handle test commands
                 if user_input.lower() == "test params":
                     # Test with different parameters
@@ -515,19 +579,19 @@ if __name__ == "__main__":
                     print("Generating response...")
                     reply = bot.chat(user_input, debug=debug_mode)
                     
-                if reply and reply.strip():
-                    print(f"Bot: {reply}\n")
-                else:
+                    if reply and reply.strip():
+                        print(f"Bot: {reply}\n")
+                    else:
                         print("Bot: (No response generated)\n")
                         
                 except torch.cuda.OutOfMemoryError:
                     print("Error: Out of GPU memory. Try reducing max_length.\n")
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower():
+                except RuntimeError as e:
+                    if "out of memory" in str(e).lower():
                         print("Error: Out of memory. Try using CPU or smaller model.\n")
-                else:
+                    else:
                         print(f"Error: {e}\n")
-            except Exception as e:
+                except Exception as e:
                     print(f"Error: {e}\n")
                     
             except KeyboardInterrupt:
