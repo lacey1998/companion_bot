@@ -13,12 +13,19 @@ from peft import LoraConfig, get_peft_model, TaskType
 # Configuration
 MODEL_NAME = "/projects/project1/laceytt/companion_bot/models/opt-1.3b"
 DATA_DIR = "/projects/project1/laceytt/companion_bot/data"
-OUTPUT_DIR = "/projects/project1/laceytt/companion_bot/checkpoints/opt-1.3b-empathetic-lora"
+OUTPUT_DIR = "/projects/project1/laceytt/companion_bot/checkpoints/opt-1.3b-empathetic-lora-exp2"
 
-MAX_LENGTH = 512
-BATCH_SIZE = 4
-EPOCHS = 1
+## Configuration of Training Hyperparameters
+MAX_LENGTH = 512      # max length of input
+BATCH_SIZE = 4        
+EPOCHS = 2
 LEARNING_RATE = 2e-4
+WARMUP_STEPS = 100
+
+# Configuration of LoRA Hyperparameters
+R = 16
+LORA_ALPHA = 32
+LORA_DROPOUT = 0.1
 
 # load preprocessed data
 def load_json_data(filepath):
@@ -47,12 +54,13 @@ model = AutoModelForCausalLM.from_pretrained(
 # configure LoRA
 lora_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.1,
-    target_modules=["q_proj", "v_proj"]  # attention layer of OPT
+    r=R,
+    lora_alpha=LORA_ALPHA,
+    lora_dropout=LORA_DROPOUT,
+    target_modules=["q_proj", "v_proj"]  # attention layers of OPT
 )
 
+# Transform OPT model into a model that can be fine-tuned with LoRA and print trainable parameters
 model = get_peft_model(model, lora_config)
 model.print_trainable_parameters()
 
@@ -74,7 +82,7 @@ training_args = TrainingArguments(
     num_train_epochs=EPOCHS,
     per_device_train_batch_size=BATCH_SIZE,
     per_device_eval_batch_size=BATCH_SIZE,
-    warmup_steps=100,
+    warmup_steps=WARMUP_STEPS,
     learning_rate=LEARNING_RATE,
     fp16=True,
     logging_steps=50, # for printing loss every 50 steps
@@ -98,6 +106,17 @@ trainer = Trainer(
     data_collator=data_collator
 )
 
+print("=" * 50)
+print("Hyperparameters:")
+print(f"  EPOCHS: {EPOCHS}")
+print(f"  BATCH_SIZE: {BATCH_SIZE}")
+print(f"  LEARNING_RATE: {LEARNING_RATE}")
+print(f"  MAX_LENGTH: {MAX_LENGTH}")
+print(f"  WARMUP_STEPS: {WARMUP_STEPS}")
+print(f"  LoRA r: {R}")
+print(f"  LoRA alpha: {LORA_ALPHA}")
+print(f"  LoRA dropout: {LORA_DROPOUT}")
+print("=" * 50)
 print("Starting training...")
 trainer.train()
 
