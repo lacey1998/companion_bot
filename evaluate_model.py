@@ -48,22 +48,44 @@ def parse_training_format(text: str) -> Dict[str, str]:
         emotion = lines[0][1:-1].strip()
         lines = lines[1:]
     
-    # Find User and Chatbot lines
+    # Find Context, User, and Chatbot lines.
+    # We specifically want the *last* chatbot turn as the target,
+    # and the last user turn before that as the user_input.
+    context = ""
     user_input = ""
     target_response = ""
-    context = ""
+    
+    user_indices = []
+    chatbot_indices = []
     
     for i, line in enumerate(lines):
-        if line.startswith("Context:"):
+        if line.startswith("Context:") and not context:
             context = line.replace("Context:", "").strip()
         elif line.startswith("User:"):
-            user_input = line.replace("User:", "").strip()
+            user_indices.append(i)
         elif line.startswith("Chatbot:"):
-            target_response = line.replace("Chatbot:", "").strip()
-            # Everything after Chatbot: is the response
-            if i + 1 < len(lines):
-                target_response = '\n'.join([target_response] + lines[i+1:]).strip()
-            break
+            chatbot_indices.append(i)
+    
+    # Determine last chatbot segment (if any)
+    if chatbot_indices:
+        last_chatbot_idx = chatbot_indices[-1]
+        # Target response is everything from the last "Chatbot:" onward
+        first_line = lines[last_chatbot_idx].replace("Chatbot:", "").strip()
+        if last_chatbot_idx + 1 < len(lines):
+            target_response = "\n".join([first_line] + lines[last_chatbot_idx + 1 :]).strip()
+        else:
+            target_response = first_line
+        
+        # User input: last "User:" line that appears before this chatbot line
+        prior_users = [idx for idx in user_indices if idx < last_chatbot_idx]
+        if prior_users:
+            last_user_idx = prior_users[-1]
+            user_input = lines[last_user_idx].replace("User:", "").strip()
+    else:
+        # Fallback: no Chatbot line; use last User as input if present
+        if user_indices:
+            last_user_idx = user_indices[-1]
+            user_input = lines[last_user_idx].replace("User:", "").strip()
     
     return {
         "emotion": emotion,
