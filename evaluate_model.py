@@ -217,23 +217,27 @@ def main():
     
     # Load model
     print(f"Loading model from: {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     
     if args.lora_path:
-        # Load base model + LoRA adapter
-        print(f"Loading LoRA adapter from: {args.lora_path}")
+        # Match test_finetune.py: tokenizer from LoRA path, base model from BASE_MODEL
+        print(f"Loading tokenizer from LoRA path: {args.lora_path}")
+        tokenizer = AutoTokenizer.from_pretrained(args.lora_path)
+        
+        print(f"Loading base model for LoRA from: {args.model_path}")
         base_model = AutoModelForCausalLM.from_pretrained(
             args.model_path,
             torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
-            device_map="auto" if device.type == "cuda" else None
+            device_map="auto" if device.type == "cuda" else None,
         )
+        print(f"Loading LoRA adapter from: {args.lora_path}")
         model = PeftModel.from_pretrained(base_model, args.lora_path)
     else:
-        # Load base model only
+        # Base model only (no LoRA)
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path)
         model = AutoModelForCausalLM.from_pretrained(
             args.model_path,
             torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
-            device_map="auto" if device.type == "cuda" else None
+            device_map="auto" if device.type == "cuda" else None,
         )
     
     if tokenizer.pad_token is None:
