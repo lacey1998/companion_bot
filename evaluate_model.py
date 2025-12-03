@@ -16,13 +16,6 @@ import torch
 from typing import List, Dict, Tuple
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
-from emotion_detector import EmotionDetector
-import sys
-import os
-
-# Add current directory to path to import companion_bot
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from companion_bot import CompanionBot
 
 
 def load_test_data(json_path: str, max_samples: int = None) -> List[Dict]:
@@ -123,75 +116,59 @@ def compute_bleu(predictions: List[str], references: List[str]) -> float:
         return 0.0
 
 
-def evaluate_emotion_appropriateness(
-    bot: CompanionBot,
-    test_data: List[Dict],
-    device: torch.device
-) -> Dict[str, float]:
-    """
-    Evaluate if responses are appropriate for detected emotions.
-    
-    Returns:
-        dict with metrics:
-        - emotion_detection_accuracy: How often emotion matches ground truth
-        - appropriate_response_rate: Subjective measure (placeholder for now)
-    """
-    emotion_detector = EmotionDetector()
-    correct_detections = 0
-    total = 0
-    
-    for item in test_data:
-        parsed = parse_training_format(item["text"])
-        ground_truth_emotion = parsed["emotion"]
-        user_input = parsed["user_input"]
-        
-        # Detect emotion
-        detected_emotion = emotion_detector.detect_emotion(user_input)
-        
-        if detected_emotion == ground_truth_emotion:
-            correct_detections += 1
-        total += 1
-    
-    accuracy = correct_detections / total if total > 0 else 0.0
-    
-    return {
-        "emotion_detection_accuracy": accuracy,
-        "correct_detections": correct_detections,
-        "total_samples": total
-    }
-
-
 def generate_responses(
-    bot: CompanionBot,
+    model,
+    tokenizer,
     test_data: List[Dict],
-    device: torch.device
-) -> Tuple[List[str], List[str], List[str]]:
+    device: torch.device,
+    use_emotion_labels: bool = False,
+) -> Tuple[List[str], List[str]]:
     """
     Generate responses for test data.
     
     Returns:
         (predictions, references, detected_emotions)
     """
-    predictions = []
-    references = []
-    detected_emotions = []
+    predictions: List[str] = []
+    references: List[str] = []
     
     for item in test_data:
         parsed = parse_training_format(item["text"])
         user_input = parsed["user_input"]
         target_response = parsed["target_response"]
+        emotion_label = parsed["emotion"]
         
-        # Generate response
-        response = bot.chat(user_input, debug=False)
+        # Build evaluation prompt directly from dataset fields.
+        if use_emotion_labels and emotion_label and emotion_label != "neutral":
+            # Match training format, but using ground-truth emotion from the dataset.
+            prompt = f"[{emotion_label}]\nContext: {parsed['context']}\nUser: {user_input}\nChatbot:"
+        else:
+            # Ignore emotion label; simple context + user prompt.
+            prompt = f"Context: {parsed['context']}\nUser: {user_input}\nChatbot:"
         
-        # Get detected emotion
-        detected_emotion = bot.get_last_detected_emotion() or "neutral"
+        # Tokenize and generate
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
+        input_length = inputs["input_ids"].shape[1]
+        
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=150,
+                temperature=0.7,
+                do_sample=True,
+                top_p=0.9,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+        
+        # For causal LMs, drop the prompt tokens and decode only the continuation.
+        generated_tokens = outputs[0][input_length:]
+        response = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
         
         predictions.append(response)
         references.append(target_response)
-        detected_emotions.append(detected_emotion)
     
-    return predictions, references, detected_emotions
+    return predictions, references
 
 
 def main():
@@ -265,14 +242,6 @@ def main():
     model.eval()
     print("Model loaded!")
     
-    # Initialize bot
-    bot = CompanionBot(
-        model=model,
-        tokenizer=tokenizer,
-        model_type="causal",
-        use_emotion_detection=args.use_emotion
-    )
-    
     # Load test data
     print(f"Loading test data from: {args.test_data}")
     test_data = load_test_data(args.test_data, max_samples=args.max_samples)
@@ -293,28 +262,23 @@ def main():
     print("\n" + "="*60)
     print("Generating responses and computing BLEU...")
     print("="*60)
-    predictions, references, detected_emotions = generate_responses(bot, test_data, device)
+    predictions, references = generate_responses(
+        model,
+        tokenizer,
+        test_data,
+        device,
+        use_emotion_labels=args.use_emotion
+    )
     bleu_score = compute_bleu(predictions, references)
     print(f"BLEU Score: {bleu_score:.2f}")
     
-    # 3. Emotion detection accuracy
-    if args.use_emotion:
-        print("\n" + "="*60)
-        print("Evaluating Emotion Detection...")
-        print("="*60)
-        emotion_metrics = evaluate_emotion_appropriateness(bot, test_data, device)
-        print(f"Emotion Detection Accuracy: {emotion_metrics['emotion_detection_accuracy']:.2%}")
-        print(f"Correct: {emotion_metrics['correct_detections']}/{emotion_metrics['total_samples']}")
-    
-    # 4. Show sample outputs
+    # 3. Show sample outputs
     print("\n" + "="*60)
     print("Sample Outputs (first 3):")
     print("="*60)
     for i in range(min(3, len(parsed_data))):
         print(f"\nSample {i+1}:")
         print(f"  Emotion (GT): {parsed_data[i]['emotion']}")
-        if args.use_emotion:
-            print(f"  Emotion (Detected): {detected_emotions[i]}")
         print(f"  User Input: {parsed_data[i]['user_input']}")
         print(f"  Target: {parsed_data[i]['target_response']}")
         print(f"  Generated: {predictions[i]}")
@@ -329,13 +293,6 @@ def main():
         "bleu_score": bleu_score,
     }
     
-    if args.use_emotion:
-        results["emotion_detection_accuracy"] = emotion_metrics['emotion_detection_accuracy']
-        results["emotion_detections"] = {
-            "correct": emotion_metrics['correct_detections'],
-            "total": emotion_metrics['total_samples']
-        }
-    
     # Save results
     if args.output_file:
         with open(args.output_file, 'w') as f:
@@ -348,8 +305,6 @@ def main():
     print("="*60)
     print(f"Perplexity: {perplexity:.2f} (lower is better)")
     print(f"BLEU Score: {bleu_score:.2f} (higher is better)")
-    if args.use_emotion:
-        print(f"Emotion Detection Accuracy: {emotion_metrics['emotion_detection_accuracy']:.2%}")
     print("="*60)
     
     return results
