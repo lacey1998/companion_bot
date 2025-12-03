@@ -186,7 +186,14 @@ def generate_responses(
         # For causal LMs, drop the prompt tokens and decode only the continuation.
         generated_tokens = outputs[0][input_length:]
         response = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
-        
+
+        # Keep only the first chatbot turn: cut off anything after a new "User:" or
+        # another "Chatbot:" marker that may appear in the continuation.
+        if "User:" in response:
+            response = response.split("User:")[0].strip()
+        if "Chatbot:" in response:
+            response = response.split("Chatbot:")[0].strip()
+
         predictions.append(response)
         references.append(target_response)
     
