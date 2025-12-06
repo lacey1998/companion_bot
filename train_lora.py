@@ -18,12 +18,12 @@ OUTPUT_DIR = "/projects/project1/laceytt/companion_bot/checkpoints/opt-1.3b-empa
 ## Configuration of Training Hyperparameters
 MAX_LENGTH = 512      # max length of input
 BATCH_SIZE = 4        
-EPOCHS = 2
+EPOCHS = 1
 LEARNING_RATE = 2e-4
 WARMUP_STEPS = 100
 
 # Configuration of LoRA Hyperparameters
-R = 16
+R = 32
 LORA_ALPHA = 32
 LORA_DROPOUT = 0.1
 
