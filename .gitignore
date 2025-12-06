@@ -15,7 +15,7 @@ models/
 *.h5
 *.pth
 *.pt
-*.safetensors
+#*.safetensors
 
 # IDE
 .vscode/
@@ -29,8 +29,8 @@ models/
 Thumbs.db
 
 # Logs and data
-*.log
-*.json
+#*.log
+#*.json
 !package.json
 !package-lock.json
 
