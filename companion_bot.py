@@ -146,16 +146,11 @@ Bot:"""
             if self.model_type == "causal":
                 max_new_tokens = min(max_length, 30)  # Reduced to prevent instruction text, but should still allow good responses
                 
-                # Use stop sequences to prevent instruction text generation
-                # This is better than post-processing pattern matching
-                # TODO: Fine-tuning (Phase 2) will reduce need for this
-                stop_strings = ["\n\nUser:", "\n\nBot:", "\nUser:", "\nBot:", 
-                               "User:", "Bot:", "when you", "do not use", 
-                               "please note", "in the event"]
-                stopping_criteria = StoppingCriteriaList([
-                    InstructionStoppingCriteria(self.tokenizer, stop_strings)
-                ])
-                
+                # Stopping criteria disabled - we rely on post-processing instead (see lines 273-330)
+                # The post-processing solution is more robust and already handles instruction-like text
+                # stopping_criteria = StoppingCriteriaList([
+                #     InstructionStoppingCriteria(self.tokenizer, stop_strings, prompt_length=input_length)
+                # ])               
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
@@ -168,7 +163,7 @@ Bot:"""
                     eos_token_id=self.tokenizer.eos_token_id,
                     repetition_penalty=repetition_penalty,
                     no_repeat_ngram_size=2,
-                    stopping_criteria=stopping_criteria,
+                    # stopping_criteria=stopping_criteria,  # Disabled - using post-processing instead
                 )
             else:
                 outputs = self.model.generate(
@@ -193,11 +188,11 @@ Bot:"""
             clean_lines = []
             for line in lines:
                 line = line.strip()
-                # Stop if line starts with User/Bot
-                if line.lower().startswith('user:') or line.lower().startswith('bot:'):
+                # Stop if line starts with User/Bot/Chatbot
+                line_lower = line.lower()
+                if line_lower.startswith('user:') or line_lower.startswith('bot:') or line_lower.startswith('chatbot:'):
                     break
                 # Stop if line starts with instruction patterns
-                line_lower = line.lower()
                 if any(line_lower.startswith(phrase) for phrase in [
                     "do not use", "do not respond", "use your best", "do not believe",
                     "anything that suggests", "anything other than"
@@ -206,19 +201,35 @@ Bot:"""
                 clean_lines.append(line)
             response = ' '.join(clean_lines).strip()
             
-            # Remove any Bot: prefix
+            # Remove any Bot: or Chatbot: prefix (if response starts with it)
             if response.lower().startswith('bot:'):
                 response = response[4:].strip()
+            elif response.lower().startswith('chatbot:'):
+                response = response[8:].strip()
+            
+            # Remove conversation markers and everything after them
+            # Priority: User > Chatbot > Bot (User always means cut off)
+            # We check for these markers anywhere in the response (not just at start)
+            # and remove everything after them
+            if "User:" in response:
+                response = response.split("User:")[0].strip()
+            elif "user:" in response:
+                response = response.split("user:")[0].strip()
+            
+            # Chatbot/Bot markers - remove if they appear (model continuing conversation)
+            # Note: If response legitimately contains "chatbot" as a word (e.g., "I am a chatbot"),
+            # it won't match "Chatbot:" or "Bot:" (with colon), so it's safe
+            if "Chatbot:" in response:
+                response = response.split("Chatbot:")[0].strip()
+            elif "chatbot:" in response:
+                response = response.split("chatbot:")[0].strip()
+            elif "Bot:" in response:
+                response = response.split("Bot:")[0].strip()
+            elif "bot:" in response:
+                response = response.split("bot:")[0].strip()
             
             # Remove instruction-like text - balanced approach
             response_lower = response.lower()
-            
-            # Check for inappropriate content first
-            inappropriate_patterns = [
-                "sex", "sexual", "nude", "naked", "porn", "fuck", "shit", "damn"
-            ]
-            # Only filter if it's clearly inappropriate (not just containing the word in context)
-            # For now, we'll be lenient and only catch obvious cases
             
             # Remove prompt patterns that might leak through (only at start)
             prompt_leakage_patterns = [
@@ -247,17 +258,10 @@ Bot:"""
                             response = ""
                     break
             
-            # TODO: TEMPORARY - Pattern-based instruction detection
-            # This is a band-aid solution. Proper fixes:
-            # 1. Fine-tune model on conversational data (see PROJECT_ROADMAP.md Phase 2)
-            # 2. Use stop sequences in generation (implemented below)
-            # 3. Train a classifier to detect instruction-like text (more robust)
-            # 
-            # For now, use a simple heuristic: stop at common instruction patterns
-            # This catches the most common cases but is not comprehensive
-            
+            # Pattern-based instruction detection
             # Heuristic: If response contains instruction-like patterns, stop there
             # Common patterns that indicate the model is generating instructions/training data
+            # This will be improved after fine-tuning
             instruction_keywords = [
                 "when you respond", "you must use", "important instructions",
                 "do not use", "do not respond", "use your best judgment",
@@ -335,16 +339,12 @@ Bot:"""
             # Try generating again with simpler prompt or return a default
             return "I'm not sure what to say."
         
-        # TODO: TEMPORARY basic safety check - will be replaced with proper Safety Layer
-        # See PROJECT_ROADMAP.md Phase 3 for full safety layer implementation
-        # This is a minimal filter until we implement the proper safety layer using Real Toxic dataset
+        # basic safety check
+        # This is a minimal basic filter until we implement the proper safety layer using Real Toxic dataset
         response_lower = response.lower()
-        # Basic inappropriate content filtering (temporary measure)
-        inappropriate_patterns = ["sex with", "sexual act", "want sex", "have sex"]
+        inappropriate_patterns = ["sex", "sexual", "nude", "naked", "porn", "fuck", "shit", "damn"]
         if any(pattern in response_lower for pattern in inappropriate_patterns):
-            # Return safe response - proper safety layer will handle this better
             return "I can't respond to that."
-        
         return response
     
     def chat(self, user_input: str, debug: bool = False) -> str:
